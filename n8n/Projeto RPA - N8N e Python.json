@@ -1,0 +1,347 @@
+{
+  "name": "Projeto RPA - N8N e Python",
+  "nodes": [
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2400,
+        -688
+      ],
+      "id": "ad121dcb-b9f3-471c-8795-45bf0aae165b",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===== 1. Junta o texto de TODOS os itens de entrada =====\nconst partes = [];\nfor (let idx = 0; idx < $input.all().length; idx++) {\n  const it = $input.all()[idx];\n  let t = it.json.data ?? it.json.body ?? it.json.text ?? it.json.csv ?? '';\n\n  if (!t && it.binary) {\n    const key = Object.keys(it.binary)[0];\n    const buf = await this.helpers.getBinaryDataBuffer(idx, key);\n    t = buf.toString('utf-8');\n  }\n  if (typeof t === 'string' && t.trim()) partes.push(t);\n}\n\nlet texto = partes.join('\\n').replace(/^\\uFEFF/, '');\nif (!texto.trim()) throw new Error('Nenhum texto CSV encontrado na entrada.');\n\n// ===== 2. Normaliza quebras de linha =====\nif (!/[\\r\\n]/.test(texto)) texto = texto.replace(/\\\\r\\\\n|\\\\n/g, '\\n');\ntexto = texto.replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n');\n\n// ===== 3. Parser CSV =====\nfunction parseCSV(str, sep = ',') {\n  const rows = [];\n  let row = [], field = '', aspas = false;\n  for (let i = 0; i < str.length; i++) {\n    const c = str[i], next = str[i + 1];\n    if (aspas) {\n      if (c === '\"' && next === '\"') { field += '\"'; i++; }\n      else if (c === '\"') aspas = false;\n      else field += c;\n    } else if (c === '\"') aspas = true;\n    else if (c === sep) { row.push(field); field = ''; }\n    else if (c === '\\n') { row.push(field); field = ''; rows.push(row); row = []; }\n    else field += c;\n  }\n  if (field !== '' || row.length) { row.push(field); rows.push(row); }\n  return rows.filter(r => r.some(v => v.trim() !== ''));\n}\n\nconst [cab, ...dados] = parseCSV(texto, ',');\nconst cols = cab.map(c => c.trim());\n\n// ===== 4. Um único item com um array de 9 registros (índice a partir de 0) =====\nconst tabela = dados.map((v, i) => ({\n  indice: i,\n  ...Object.fromEntries(cols.map((c, j) => [c, (v[j] ?? '').trim()])),\n}));\n\nreturn [{ json: { tabela } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        -368
+      ],
+      "id": "8784df70-18ab-4054-9267-bcdcab1484bd",
+      "name": "Tratamento dos dados"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst IPCA_ESTIMADO = 4.5;\nconst ORDEM = ['conservador', 'moderado', 'arrojado'];\n\nconst EXPLICACOES = [\n  { re: /selic|liquidez diaria|poupanca|reserva/, texto: 'tem baixo risco e liquidez imediata, ideal para reserva de emergência e preservação do capital' },\n  { re: /ipca/, texto: 'protege o poder de compra contra a inflação e busca ganho real acima do IPCA; é indicado para prazos longos e pode oscilar antes do vencimento' },\n  { re: /cdb|lci|lca|renda fixa|prefixado|debenture/, texto: 'é um investimento de renda fixa que pode contribuir para a estabilidade da carteira' },\n  { re: /multimercado/, texto: 'investe em diferentes mercados, como juros, câmbio e bolsa, buscando diversificação com risco moderado' },\n  { re: /fii|imobili/, texto: 'permite investir no mercado imobiliário sem comprar um imóvel diretamente, mas o valor da cota pode oscilar' },\n  { re: /etf/, texto: 'oferece exposição diversificada ao mercado de ações e pode apresentar oscilações no curto prazo' },\n  { re: /fundo de acoes|acoes/, texto: 'investe em uma carteira de ações e pode apresentar alta volatilidade' },\n  { re: /cripto|bitcoin/, texto: 'apresenta elevada volatilidade e risco de perdas significativas' },\n];\n\nconst DISCLAIMER =\n  'As rentabilidades informadas são referências e não garantem resultados futuros. Esta sugestão automatizada não substitui a análise de um profissional habilitado.';\n\nconst norm = (s) =>\n  String(s ?? '')\n    .toLowerCase()\n    .normalize('NFD')\n    .replace(/[\\u0300-\\u036f]/g, '')\n    .trim();\n\nconst toNum = (v) => {\n  if (typeof v === 'number') return v;\n  if (v === undefined || v === null || v === '') return NaN;\n\n  const s = String(v).replace(/[R$\\s]/g, '');\n  return Number(\n    s.includes(',')\n      ? s.replace(/\\./g, '').replace(',', '.')\n      : s\n  );\n};\n\nconst fmt = (n) =>\n  Number(n).toLocaleString('pt-BR', {\n    minimumFractionDigits: 2,\n    maximumFractionDigits: 2,\n  });\n\nconst cap = (s) => {\n  const t = String(s ?? '').trim();\n  return t ? t[0].toUpperCase() + t.slice(1).toLowerCase() : t;\n};\n\nfunction coletar(x, teste, acc = []) {\n  if (Array.isArray(x)) {\n    x.forEach((i) => coletar(i, teste, acc));\n  } else if (x && typeof x === 'object') {\n    if (teste(x)) {\n      acc.push(x);\n    } else {\n      Object.values(x).forEach((v) => coletar(v, teste, acc));\n    }\n  }\n  return acc;\n}\n\nfunction retornoNum(r) {\n  const s = String(r ?? '');\n  const match = s.match(/[\\d.,]+/);\n\n  if (!match) return null;\n\n  const n = parseFloat(match[0].replace(',', '.'));\n\n  if (!Number.isFinite(n)) return null;\n\n  return /ipca/i.test(s) ? n + IPCA_ESTIMADO : n;\n}\n\n// =============== LEITURA DO MERGE ===============\n\nconst entrada = $input.all().map((item) => item.json);\n\n// O Merge contém body.clientes e tabela no mesmo objeto.\nconst catalogo = coletar(\n  entrada,\n  (o) => o.produto !== undefined && o.perfil !== undefined\n).map((p) => ({\n  perfil: norm(p.perfil),\n  produto: p.produto,\n  minimo: toNum(p.minimo),\n  rentabilidade: p.rentabilidade,\n  retorno: retornoNum(p.rentabilidade),\n}));\n\nconst clientes = coletar(\n  entrada,\n  (o) =>\n    o.produto === undefined &&\n    o.perfil !== undefined &&\n    o.nome !== undefined\n);\n\nif (!catalogo.length) {\n  throw new Error(\n    'Catálogo não encontrado. Verifique o campo tabela no output do Merge.'\n  );\n}\n\nif (!clientes.length) {\n  throw new Error(\n    'Clientes não encontrados. Verifique o campo body.clientes no output do Merge.'\n  );\n}\n\n// =============== SELEÇÃO DOS PRODUTOS ===============\n\nfunction explicar(p, alvo, perfilLabel, valor) {\n  const explicacao =\n    EXPLICACOES.find((e) => e.re.test(norm(p.produto)))?.texto ??\n    'é uma opção disponível no catálogo para análise';\n\n  const encaixe =\n    p.pi === alvo\n      ? `Está classificado para o perfil ${perfilLabel}.`\n      : 'É uma alternativa de perfil mais conservador, que pode contribuir para a diversificação.';\n\n  const aporte = Number.isFinite(p.minimo)\n    ? `O aporte mínimo informado é de R$ ${fmt(p.minimo)}${\n        Number.isFinite(valor)\n          ? `, dentro do saldo disponível de R$ ${fmt(valor)}`\n          : ''\n      }.`\n    : '';\n\n  const rent = p.rentabilidade\n    ? `Rentabilidade informada no catálogo: ${p.rentabilidade}.`\n    : '';\n\n  return `${p.produto}: ${explicacao}. ${encaixe} ${aporte} ${rent}`\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction sugerir(perfil, valor) {\n  const idx = ORDEM.indexOf(norm(perfil));\n  const alvo = idx === -1 ? 1 : idx;\n  const perfilLabel = cap(idx === -1 ? 'moderado' : perfil);\n\n  const elegiveis = catalogo\n    .map((p) => ({ ...p, pi: ORDEM.indexOf(p.perfil) }))\n    .filter((p) => p.pi !== -1 && p.pi <= alvo)\n    .filter(\n      (p) =>\n        !Number.isFinite(valor) ||\n        !Number.isFinite(p.minimo) ||\n        p.minimo <= valor\n    );\n\n  elegiveis.sort((a, b) => {\n    const distA = alvo - a.pi;\n    const distB = alvo - b.pi;\n\n    if (distA !== distB) return distA - distB;\n\n    // Produtos com rentabilidade variável ficam por último.\n    return (b.retorno ?? -1) - (a.retorno ?? -1);\n  });\n\n  return elegiveis.slice(0, 3).map((p, i) => ({\n    posicao: i + 1,\n    produto: p.produto,\n    perfil_produto: p.perfil,\n    minimo: Number.isFinite(p.minimo) ? p.minimo : null,\n    rentabilidade: p.rentabilidade ?? null,\n    explicacao: explicar(p, alvo, perfilLabel, valor),\n  }));\n}\n\n// =============== SAÍDA PARA A LLM ===============\n\nreturn clientes.map((c) => {\n  const valor = toNum(c.saldo);\n  const perfilValido = ORDEM.includes(norm(c.perfil));\n  const perfilLabel = cap(perfilValido ? c.perfil : 'moderado');\n  const sugestoes = sugerir(c.perfil, valor);\n\n  const contexto = {\n    nome: c.nome,\n    email: c.email ?? '',\n    perfil: perfilLabel,\n    saldo: Number.isFinite(valor) ? fmt(valor) : null,\n    melhor_escolha: sugestoes[0] ?? null,\n    outras_opcoes: sugestoes.slice(1),\n    quantidade_sugestoes: sugestoes.length,\n    aviso:\n      sugestoes.length < 3\n        ? 'Menos de 3 produtos elegíveis para este perfil e saldo.'\n        : null,\n    disclaimer: DISCLAIMER,\n  };\n\n  return {\n    json: {\n      nome: c.nome,\n      email: c.email ?? '',\n      perfil: perfilLabel,\n      saldo: Number.isFinite(valor) ? valor : null,\n\n      sugestoes,\n      melhor_escolha: sugestoes[0]?.produto ?? null,\n      sugestao_1: sugestoes[0]?.produto ?? null,\n      sugestao_2: sugestoes[1]?.produto ?? null,\n      sugestao_3: sugestoes[2]?.produto ?? null,\n\n      quantidade_sugestoes: sugestoes.length,\n      aviso: contexto.aviso,\n\n      // O próximo node de IA utilizará este contexto.\n      contexto_llm: JSON.stringify(contexto),\n\n      // A mensagem será escrita pela LLM no próximo node.\n      mensagem: null,\n    },\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        -448
+      ],
+      "id": "b2d43268-e22d-4928-83cb-150269ebce71",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        640,
+        -448
+      ],
+      "id": "ba6589f4-6ef9-4bd8-9e70-40e8725988c7",
+      "name": "Cruzamento de Dados"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst items = $input.all();\n\nconst normalizados = items.map((item) => {\n  const dados = item.json;\n\n  // Converte números e valores monetários para um formato consistente.\n  function converterNumero(valor) {\n    if (valor === null || valor === undefined || valor === '') {\n      return null;\n    }\n\n    if (typeof valor === 'number') {\n      return Number.isFinite(valor) ? valor : null;\n    }\n\n    const texto = String(valor).trim().replace(/[R$\\s]/g, '');\n    const numero = Number(\n      texto.includes(',')\n        ? texto.replace(/\\./g, '').replace(',', '.')\n        : texto\n    );\n\n    return Number.isFinite(numero) ? numero : null;\n  }\n\n  function formatarMoeda(valor) {\n    const numero = converterNumero(valor);\n\n    if (numero === null) return 'Não informado';\n\n    return numero.toLocaleString('pt-BR', {\n      style: 'currency',\n      currency: 'BRL',\n    });\n  }\n\n  function textoSeguro(valor, padrao = '') {\n    if (valor === null || valor === undefined) return padrao;\n    return String(valor).trim() || padrao;\n  }\n\n  // Normaliza as sugestões, preservando os detalhes de cada produto.\n  let sugestoes = Array.isArray(dados.sugestoes)\n    ? dados.sugestoes\n    : [];\n\n  sugestoes = sugestoes\n    .filter((s) => s && typeof s === 'object' && s.produto)\n    .map((s, indice) => ({\n      posicao: Number(s.posicao) || indice + 1,\n      produto: textoSeguro(s.produto),\n      perfil_produto: textoSeguro(s.perfil_produto, 'Não informado'),\n      minimo: converterNumero(s.minimo),\n      minimo_formatado:\n        converterNumero(s.minimo) !== null\n          ? formatarMoeda(s.minimo)\n          : 'Não informado',\n      rentabilidade: textoSeguro(\n        s.rentabilidade,\n        'Não informada'\n      ),\n      explicacao: textoSeguro(\n        s.explicacao,\n        'Consulte as características do produto antes de investir.'\n      ),\n    }));\n\n  // Identifica a primeira sugestão como escolha prioritária.\n  const melhorEscolha =\n    sugestoes.find((s) => s.posicao === 1) || sugestoes[0] || null;\n\n  const alternativas = sugestoes.filter(\n    (s) => s.produto !== melhorEscolha?.produto\n  );\n\n  const nome = textoSeguro(dados.nome, 'Cliente');\n  const email = textoSeguro(dados.email).toLowerCase();\n  const perfil = textoSeguro(dados.perfil, 'Não informado');\n  const saldo = converterNumero(dados.saldo);\n\n  const aviso = textoSeguro(\n    dados.aviso,\n    sugestoes.length < 3\n      ? 'Foram encontradas menos de três opções elegíveis.'\n      : ''\n  );\n\n  const contexto = {\n    nome,\n    primeiro_nome: nome.split(/\\s+/)[0],\n    email,\n    perfil,\n    saldo: saldo,\n    saldo_formatado: formatarMoeda(saldo),\n    quantidade_sugestoes: sugestoes.length,\n    melhor_escolha: melhorEscolha,\n    alternativas,\n    aviso,\n    disclaimer: textoSeguro(\n      dados.disclaimer,\n      'Rentabilidades informadas são referências e não garantem resultados futuros. Esta sugestão automatizada não substitui a análise de um profissional habilitado.'\n    ),\n  };\n\n  // Texto organizado para ser enviado ao node OpenAI.\n  const contextoOpenAI = [\n    `Nome: ${contexto.nome}`,\n    `Primeiro nome: ${contexto.primeiro_nome}`,\n    `E-mail: ${contexto.email}`,\n    `Perfil de investidor: ${contexto.perfil}`,\n    `Saldo disponível: ${contexto.saldo_formatado}`,\n    '',\n    'MELHOR ESCOLHA:',\n    melhorEscolha\n      ? JSON.stringify(melhorEscolha, null, 2)\n      : 'Nenhuma opção elegível foi encontrada.',\n    '',\n    `Aviso obrigatório: ${contexto.disclaimer}`,\n  ]\n    .filter((linha) => linha !== null && linha !== undefined)\n    .join('\\n');\n\n  return {\n    json: {\n      nome: contexto.nome,\n      primeiro_nome: contexto.primeiro_nome,\n      email: contexto.email,\n      perfil: contexto.perfil,\n      saldo: contexto.saldo,\n      saldo_formatado: contexto.saldo_formatado,\n      melhor_escolha_detalhes: melhorEscolha,\n      sugestoes,\n      disclaimer: contexto.disclaimer,\n      contexto_openai: contextoOpenAI,\n\n      // Controle para impedir envio sem destinatário ou recomendação.\n      pronto_para_gerar:\n        Boolean(contexto.email) && Boolean(melhorEscolha),\n    },\n  };\n});\n\nreturn normalizados;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        -448
+      ],
+      "id": "785d7dd9-ab37-4a11-8e6f-a0af8d750b25",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5.4",
+          "mode": "list",
+          "cachedResultName": "GPT-5.4"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=Você é um assistente de relacionamento de uma instituição financeira. Escreva um e-mail personalizado em português brasileiro, com tom humano, claro, profissional e acolhedor.\n\nDADOS DO CLIENTE E DAS SUGESTÕES:\n{{ $json.contexto_openai }}\n\nInstruções:\n1. Comece cumprimentando o cliente pelo primeiro nome.\n2. Explique a melhor escolha indicada nos dados e por que ela pode se encaixar no perfil informado.\n3. Use somente as características e informações fornecidas. Não invente dados, taxas, rentabilidades, prazos ou garantias.\n4. Mencione as alternativas disponíveis, quando houver, destacando brevemente suas diferenças.\n5. Considere o saldo e o aporte mínimo informado, sem recomendar automaticamente que todo o saldo seja investido.\n6. Se nenhuma opção elegível tiver sido encontrada, não invente uma recomendação. Informe que será necessária uma nova análise.\n7. Se houver menos de três opções, não invente produtos adicionais.\n8. Inclua o aviso de que rentabilidades são referências, não garantias de resultados futuros, e que a sugestão automatizada não substitui a análise de um profissional habilitado.\n9. Termine convidando o cliente a entrar em contato em caso de dúvidas.\n\nRetorne somente um JSON válido, sem markdown ou blocos de código, neste formato:\n{\n  \"assunto\": \"Assunto personalizado do e-mail\",\n  \"mensagem\": \"Corpo completo do e-mail, com parágrafos separados por quebras de linha\"\n}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        1328,
+        -672
+      ],
+      "id": "37ce8428-d37a-496b-b878-8c48ff2ad34e",
+      "name": "Message a model",
+      "credentials": {
+        "openAiApi": {
+          "id": null,
+          "name": "",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst items = $input.all();\n\n// IMPORTANTE: troque \"Code node 2\" pelo nome exato\n// do node anterior ao OpenAI que contém os dados dos clientes.\nconst clientes = $('Code in JavaScript').all();\n\nfunction interpretarResposta(item) {\n  const dados = item.json;\n\n  // Caminho encontrado no output real do seu OpenAI\n  const texto = dados.output?.[0]?.content?.find(\n    c => c.type === 'output_text'\n  )?.text;\n\n  if (!texto) {\n    throw new Error(\n      'Resposta de texto não encontrada no item do OpenAI.'\n    );\n  }\n\n  // Converte o JSON textual da IA em objeto JavaScript\n  let resposta;\n\n  try {\n    resposta = JSON.parse(texto);\n  } catch (erro) {\n    throw new Error(\n      `A resposta da IA não contém JSON válido. Item: ${JSON.stringify(dados)}`\n    );\n  }\n\n  return resposta;\n}\n\nreturn items.map((item, index) => {\n  const respostaIA = interpretarResposta(item);\n\n  // Recupera os dados originais do cliente\n  const cliente = clientes[index]?.json ?? {};\n\n  const email = cliente.email ?? '';\n  const nome = cliente.nome ?? '';\n  const primeiroNome =\n    cliente.primeiro_nome ??\n    nome.trim().split(/\\s+/)[0] ??\n    '';\n\n  const assunto = String(respostaIA.assunto ?? '').trim();\n  const mensagem = String(respostaIA.mensagem ?? '').trim();\n\n  const erros = [];\n\n  if (!email) erros.push('E-mail do cliente não encontrado.');\n  if (!assunto) erros.push('Assunto não encontrado.');\n  if (!mensagem) erros.push('Mensagem não encontrada.');\n\n  return {\n    json: {\n      ...cliente,\n\n      // Dados gerados pelo OpenAI\n      assunto,\n      mensagem,\n\n      // Campos para o node de envio\n      email,\n      nome,\n      primeiro_nome: primeiroNome,\n\n      pronto_para_enviar: erros.length === 0,\n      erro_normalizacao: erros.length\n        ? erros.join(' ')\n        : null\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1664,
+        -672
+      ],
+      "id": "d692a5ad-c501-4140-9546-391b42536119",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ $json.assunto }}",
+        "message": "={{ $json.mensagem }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2144,
+        -688
+      ],
+      "id": "8dc81924-47a9-426a-9c3a-9678a19c75e6",
+      "name": "Send a message",
+      "webhookId": "c9d9b0ad-e135-48cf-90cf-f5b0e47386e7",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "naQkysDqEQ0LmhL3",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "9fdb6d74-c85e-46ff-b667-5a458eed1f3a",
+              "leftValue": "={{ $json.contexto_llm }}",
+              "rightValue": "=",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        1888,
+        -672
+      ],
+      "id": "df636276-6bb1-496e-b960-05f530ac4a79",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clientes",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        -32,
+        -448
+      ],
+      "id": "bf0157b7-1e97-4d07-bdff-8a2df12d6725",
+      "name": "Clientes",
+      "webhookId": "f597b376-ac36-4706-982d-b66dbab93891"
+    },
+    {
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/MarceloHPGS/dio-lab-assistente-investimentos-rpa-n8n/refs/heads/main/docs/data.csv",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        192,
+        -368
+      ],
+      "id": "806de879-e46b-4bbc-ac13-afd02fa82f1c",
+      "name": "Investimentos"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Respond to Webhook": {
+      "main": [
+        []
+      ]
+    },
+    "Tratamento dos dados": {
+      "main": [
+        [
+          {
+            "node": "Cruzamento de Dados",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cruzamento de Dados": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clientes": {
+      "main": [
+        [
+          {
+            "node": "Investimentos",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Cruzamento de Dados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Investimentos": {
+      "main": [
+        [
+          {
+            "node": "Tratamento dos dados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "e5373e2a-3af8-4cab-b6a6-280e7fee9d61",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "22bed273c228b2431eb3e07872186beb7ad7626c9c1137d4102c29bcac7d5327"
+  },
+  "nodeGroups": [],
+  "id": "gwgXFJ8hlBB7wz2p",
+  "tags": []
+}
