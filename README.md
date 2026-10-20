@@ -1,4 +1,4 @@
-# Criando um Assistente de Investimentos com RPA e IA Generativa
+<img width="1916" height="989" alt="image" src="https://github.com/user-attachments/assets/df4f95a2-c4bc-43a2-bdc5-c122008e618a" /># Criando um Assistente de Investimentos com RPA e IA Generativa
 
 ## Descrição
 
@@ -127,11 +127,11 @@ Conecte o Agente de IA do N8N a um modelo como Gemini ou GPT para:
 - [✅] Repositório forkado com o workflow N8N implementado
 - [✅] Workflow N8N exportado (`n8n/workflow.json`) com mensagens estáticas
 - [✅] Script de RPA integrado ao Webhook do N8N
-- [ ] Print ou vídeo demonstrando o fluxo funcionando de ponta a ponta
+- [✅] Print ou vídeo demonstrando o fluxo funcionando de ponta a ponta
 
 ### Desafio Completo
 
-- [ ] Todos os itens do MVP
+- [✅] Todos os itens do MVP
 - [ ] Integração com Agente de IA no N8N
 - [ ] Mensagens geradas dinamicamente via LLM
 - [ ] Documentação explicando as decisões técnicas
