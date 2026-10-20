@@ -1,4 +1,4 @@
-<img width="1916" height="989" alt="image" src="https://github.com/user-attachments/assets/df4f95a2-c4bc-43a2-bdc5-c122008e618a" /># Criando um Assistente de Investimentos com RPA e IA Generativa
+# Criando um Assistente de Investimentos com RPA e IA Generativa
 
 ## Descrição
 
