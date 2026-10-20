@@ -124,9 +124,9 @@ Conecte o Agente de IA do N8N a um modelo como Gemini ou GPT para:
 
 ### MVP (Mínimo Viável)
 
-- [ ] Repositório forkado com o workflow N8N implementado
-- [ ] Workflow N8N exportado (`n8n/workflow.json`) com mensagens estáticas
-- [ ] Script de RPA integrado ao Webhook do N8N
+- [✅] Repositório forkado com o workflow N8N implementado
+- [✅] Workflow N8N exportado (`n8n/workflow.json`) com mensagens estáticas
+- [✅] Script de RPA integrado ao Webhook do N8N
 - [ ] Print ou vídeo demonstrando o fluxo funcionando de ponta a ponta
 
 ### Desafio Completo
